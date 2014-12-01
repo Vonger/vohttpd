@@ -1,7 +1,8 @@
 /*  vohttpd common library
  *
  *  author: Qin Wei(me@vonger.cn)
- *  compile: cc -shared -o libvohttpd.plugin.so vohttpdext.c libvohttpd.plugin.c
+ *  compile:
+ *      cc -shared -o libvohttpd.plugin.so ../vohttpdext.c libvohttpd.plugin.c
  *
  */
 #include <stdio.h>
@@ -10,7 +11,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 
-#include "vohttpd.h"
+#include "../vohttpd.h"
 
 int plugin_upload(socket_data *d, string_reference *pa)
 {

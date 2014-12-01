@@ -1,16 +1,17 @@
 /*  vohttpd common library
  *
  *  author: Qin Wei(me@vonger.cn)
- *  compile: cc -shared -o libvohttpd.test.so vohttpdext.c libvohttpd.test.c
+ *  compile:
+ *      cc -shared -o libvohttpd.test.so ../vohttpdext.c libvohttpd.test.c
  *
  */
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 
-#include "vohttpd.h"
+#include "../vohttpd.h"
 
-int common_echo(socket_data *d, string_reference *pa)
+int test_echo(socket_data *d, string_reference *pa)
 {
     char buf[MESSAGE_SIZE];
     int size;
@@ -30,12 +31,12 @@ int common_echo(socket_data *d, string_reference *pa)
     return 0;
 }
 
-int common_text(socket_data *d, string_reference *pa)
+int test_text(socket_data *d, string_reference *pa)
 {
     char head[MESSAGE_SIZE], buf[MESSAGE_SIZE];
     int size, total;
 
-    total = sprintf(buf, "<html><head><title>common_text</title></head><body><h"
+    total = sprintf(buf, "<html><head><title>test_text</title></head><body><h"
         "1>Hello World!</h1></body></html>");
 
     size = vohttpd_reply_head(head, 200);
@@ -54,8 +55,8 @@ int common_text(socket_data *d, string_reference *pa)
 }
 
 static plugin_info g_info[] = {
-    {common_echo, "test_echo", "it will return what it get from parameter."},
-    {common_text, "test_text", "it will always show hello world."},
+    {test_echo, "test_echo", "it will return what it get from parameter."},
+    {test_text, "test_text", "it will always show hello world."},
 };
 #define VOHTTPD_PLUGIN "contains test functions for vohttpd."
 #define vohttpd_set_note(pp, note) if(pp){*pp = note;}
@@ -69,7 +70,7 @@ void* vohttpd_library_query(char *func, const char **note)
         return NULL;
     }
 
-    if(index >= sizeof(g_info) / sizeof(library_info))
+    if(index >= sizeof(g_info) / sizeof(plugin_info))
         return NULL;
     if(strlen(g_info[index].name) >= FUNCTION_SIZE) {
         printf("[%s] PLUGIN FATAL\nInternal function name is too long.\n", vohttpd_gmtime());
