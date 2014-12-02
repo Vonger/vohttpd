@@ -1,7 +1,7 @@
 vohttpd
 =======
 
-Simple, Flexible, Fast, Embed httpd. 
+Simple, Flexible, Fast, Embedded httpd. 
 
 <http://vonger.cn>
 
