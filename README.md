@@ -7,7 +7,7 @@ Simple, Flexible, Fast, Embed httpd.
 
 ##Compile##
 
-###Compile Httpd###
+###Compile vohttpd###
 
     $ cd src
     $ make
