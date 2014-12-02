@@ -104,8 +104,8 @@ typedef linear_hash              string_hash;
 
 string_hash* string_hash_alloc(uint unit, uint max)
 {
-    string_hash *sh =
-        (string_hash *)malloc(max * (unit + sizeof(uchar *)) + sizeof(string_hash));
+    string_hash *sh = (string_hash *)
+        malloc(max * (unit + sizeof(uchar *)) + sizeof(string_hash));
     if(sh == NULL)
         return NULL;
     memset(sh, 0, max * (unit + sizeof(uchar *)) + sizeof(string_hash));
@@ -672,8 +672,9 @@ int vohttpd_load_library(socket_data *d, string_reference *pa)
             total++;
         }
 
-        size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b>&nbsp&nbsp&nbsp&nbsp&nbsp<"
-            "i style=\"font-size:14px;color:#999999\">%s</i></p>", status, name, note);
+        size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b>&nbsp&nbsp&nbsp"
+            "&nbsp&nbsp<i style=\"font-size:14px;color:#999999\">%s"
+            "</i></p>", status, name, note);
         send(d->sock, buf, size, 0);
     }
     size = sprintf(buf, "<p><b style=\"color:#339900\">The library has loaded."
@@ -719,7 +720,8 @@ int vohttpd_query_library(socket_data *d, string_reference *pa)
             query = dlsym(h, LIBRARY_QUERY);
             query(NULL, &note);
             if(note != NULL) {
-                size = sprintf(buf, "<p><i style=\"font-size:14px;color:#999999\">%s</i></p>", note);
+                size = sprintf(buf, "<p><i style=\"font-size:14px;color:"
+                    "#999999\">%s</i></p>", note);
                 send(d->sock, buf, size, 0);
             }
             while(func = (plugin_func)query(name, &note), func) {
@@ -734,8 +736,9 @@ int vohttpd_query_library(socket_data *d, string_reference *pa)
                         tfunc++;
                     }
                 }
-                size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b>&nbsp&nbsp&nbsp&nb"
-                    "sp&nbsp<i style=\"font-size:14px;color:#999999\">%s</i></p>", status, name, note);
+                size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b>&nbsp&nbsp"
+                    "&nbsp&nbsp&nbsp<i style=\"font-size:14px;color:#999999\">"
+                    "%s</i></p>", status, name, note);
                 send(d->sock, buf, size, 0);
             }
 
@@ -903,8 +906,19 @@ int main(int argc, char *argv[])
                         // no body in this http request, it should be GET.
                         continue;
                     }
+
                     // the head buffer can not contain the body data
                     // we have to alloc memory for it.
+                    //
+                    // TODO: change this part to file mapping might be better.
+                    // in most situation, embed device do not have to transfer
+                    // much data unless receiving a file, so file mapping will
+                    // save a lot of memory and save cost on store file.
+                    // one thread process make this simple, map file name can be
+                    // temp.[sock], once the socket is closed, delete that temp
+                    // file. In plugin, we can move that file to another folder
+                    // when we get full of it to save upload file.
+                    // add a function: vohttpd_temp_filename(socket_data)
                     if(d->size > RECVBUF_SIZE - d->used + d->recv) {
                         d->body = malloc(d->size);
                         memset(d->body, 0, d->size);

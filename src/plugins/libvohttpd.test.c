@@ -55,8 +55,17 @@ int test_text(socket_data *d, string_reference *pa)
 }
 
 static plugin_info g_info[] = {
-    {test_echo, "test_echo", "it will return what it get from parameter."},
-    {test_text, "test_text", "it will always show hello world."},
+    {
+        test_echo,
+        "test_echo",
+        "it will return what it get from parameter."
+    },
+
+    {
+        test_text,
+        "test_text",
+        "it will always show hello world."
+    },
 };
 #define VOHTTPD_PLUGIN "contains test functions for vohttpd."
 #define vohttpd_set_note(pp, note) if(pp){*pp = note;}
@@ -73,7 +82,8 @@ void* vohttpd_library_query(char *func, const char **note)
     if(index >= sizeof(g_info) / sizeof(plugin_info))
         return NULL;
     if(strlen(g_info[index].name) >= FUNCTION_SIZE) {
-        printf("[%s] PLUGIN FATAL\nInternal function name is too long.\n", vohttpd_gmtime());
+        printf("[%s] PLUGIN FATAL\nInternal function name is too long.\n",
+           vohttpd_gmtime());
         return NULL;
     }
 

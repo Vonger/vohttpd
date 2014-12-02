@@ -49,8 +49,17 @@ int plugin_remove(socket_data *d, string_reference *pa)
 }
 
 static plugin_info g_info[] = {
-    {plugin_upload, "plugin_upload", "save data to local, data will append to temp file, return received size."},
-    {plugin_remove, "plugin_remove", "delete plugin from cgi-bin folder, parameter is the file name."},
+    {
+        plugin_upload,
+        "plugin_upload",
+        "save data to local, data will append to temp file."
+    },
+
+    {
+        plugin_remove,
+        "plugin_remove",
+        "delete plugin from cgi-bin folder, parameter is the file name."
+    },
 };
 #define VOHTTPD_PLUGIN "contains plugin control functions"
 #define vohttpd_set_note(pp, note) if(pp){*pp = note;}
@@ -67,7 +76,8 @@ void* vohttpd_library_query(char *func, const char **note)
     if(index >= sizeof(g_info) / sizeof(plugin_info))
         return NULL;
     if(strlen(g_info[index].name) >= FUNCTION_SIZE) {
-        printf("[%s] PLUGIN FATAL\nInternal function name is too long.\n", vohttpd_gmtime());
+        printf("[%s] PLUGIN FATAL\nInternal function name is too long.\n",
+            vohttpd_gmtime());
         return NULL;
     }
 
