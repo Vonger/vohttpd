@@ -28,5 +28,5 @@ Then you will get `vohttpd` executable file in current directory.
 ###Cross Compile###
 
     $ cd src
-    $ make CROSS_COMPILE=mips-openwrt-linux-uclibc-
-    $ make plugins CROSS_COMPILE=mips-openwrt-linux-uclibc-
+    $ make CROSS_COMPILE=mipsel-openwrt-linux-uclibc-
+    $ make plugins CROSS_COMPILE=mipsel-openwrt-linux-uclibc-
