@@ -111,40 +111,10 @@ const char *vohttpd_gmtime()
     return out;
 }
 
-int vohttpd_error_page(socket_data *d, int code, const char *err)
-{
-    char head[MESSAGE_SIZE], body[MESSAGE_SIZE];
-    const char *msg;
-    int  size, total = 0;
-
-    if(err == NULL)
-        err = "Sorry, I have tried my best... :'(";
-
-    msg = vohttpd_code_message(code);
-    total = sprintf(body,
-        "<html><head><title>%s</title></head><body style=\"font-family:%s;\">"
-        "<h1 style=\"color:#0040F0\">%d %s</h1><p style=\"font-size:14px;\">%s"
-        "</p></body></html>", msg, HTTP_FONT, code, msg, err);
-
-    size = vohttpd_reply_head(head, code);
-    size += sprintf(head + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
-    size += sprintf(head + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
-    size += sprintf(head + size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
-    strcat(head, "\r\n"); size += 2;
-
-    size = send(d->sock, head, size, 0);
-    if(size <= 0)
-        return -1;
-    total = send(d->sock, body, total, 0);
-    if(total <= 0)
-        return -1;
-    return total + size;
-}
-
-// return only head parameters, do not care about function name.
+// return only head parameters, do not contains data before function parameter.
 // for example: http://vonger.cn/cgi-bin/hello?sometext,and,ok,
 // it will return "sometext,and,ok"
-int vohttpd_head_parameter(socket_data *d, string_reference *s)
+int vohttpd_uri_parameters(socket_data *d, string_reference *s)
 {
     char *end, *p;
     p = strstr(d->head, "\r\n");
@@ -166,14 +136,15 @@ int vohttpd_head_parameter(socket_data *d, string_reference *s)
     return s->size;
 }
 
-int vohttpd_get_parameter(string_reference *s)
+int vohttpd_uri_first_parameter(string_reference *s, string_reference *first)
 {
     char *p, *end;
     p = s->ref;
     end = s->ref + s->size;
     while(p != end) {
         if(*p == ',') {
-            s->size = p - s->ref;
+            first->ref = s->ref;
+            first->size = p - s->ref;
             return 1;
         }
         p++;

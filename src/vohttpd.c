@@ -24,13 +24,6 @@
 #define linear_hash_empty(h, p)  (linear_hash_key((h), (p)) == LINEAR_HASH_NULL)
 #define linear_hash_clear(h, p)  {linear_hash_key((h), (p)) = LINEAR_HASH_NULL;}
 
-typedef struct _linear_hash {
-    uint   unit;            // the size for each unit.
-    uint   max;             // the max allowed unit.
-
-    uchar  data[1];
-}linear_hash;
-
 linear_hash* linear_hash_alloc(uint unit, uint max)
 {
     linear_hash *lh =
@@ -96,7 +89,6 @@ void linear_hash_remove(linear_hash *lh, uint key)
 
 
 /* string hash, get data by string, make it faster. */
-typedef linear_hash              string_hash;
 #define string_hash_p1(h, p)     ((char *)((h->data + p) + sizeof(uchar *)))
 #define string_hash_p2(h, p)     (*((uchar **)(h->data + p)))
 #define string_hash_empty(h, p)  (*string_hash_p1((h), (p)) == '\0')
@@ -190,6 +182,21 @@ void string_hash_remove(string_hash *sh, char *key)
     }
 }
 
+int get_name_from_path(const char *path, char *name, size_t size)
+{
+    char *p1, *p2, *p;
+
+    p1 = strrchr(path, '/');
+    p2 = strrchr(path, '\\');
+    if(!p1 || !p2) {
+        strncpy(name, path, size);
+        return strlen(path);
+    }
+
+    p = max(p1, p2) + 1;
+    strncpy(name, p, size);
+    return strlen(p);
+}
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -203,18 +210,20 @@ void string_hash_remove(string_hash *sh, char *key)
 #include <string.h>
 #include <dlfcn.h>
 
+#define HTTP_HEADER_END     "\r\n\r\n"
+#define HTTP_CONTENT_LENGTH "Content-Length"
+#define HTTP_CONTENT_TYPE   "Content-Type"
+#define HTTP_DATE_TIME      "Date"
+#define HTTP_CONNECTION     "Connection"
+#define HTTP_GET            "GET"
+#define HTTP_POST           "POST"
+#define HTTP_FONT           "Helvetica,Arial,sans-serif"
+
 #define TIMEOUT             3000
 
-#define max(a, b)           ((a) > (b) ? (a) : (b))
-#define min(a, b)           ((a) < (b) ? (a) : (b))
-
-global_setting vohttpd_setting;
-filter_init vohttpd_filter_init;
+static vohttpd g_set;
 
 // store library(.so, .dll) name, handle, and function(no '.'), handle.
-static string_hash* g_funcs;
-static linear_hash* g_socks;
-
 void socketdata_init(socket_data *d)
 {
     if(d->body < d->head || d->body >= d->head + RECVBUF_SIZE)
@@ -225,17 +234,17 @@ void socketdata_init(socket_data *d)
     d->size = 0;
     d->used = 0;
 
-    d->set = &vohttpd_setting;
+    d->set = &g_set;
 }
 
-void socketdata_remove(linear_hash *g_socks, int sock)
+void socketdata_remove(linear_hash *socks, int sock)
 {
-    socket_data *d = (socket_data *)linear_hash_get(g_socks, sock);
+    socket_data *d = (socket_data *)linear_hash_get(socks, sock);
     close(sock);
     // check if the body point to head, if so we do not release it.
     if(d->body < d->head || d->body >= d->head + RECVBUF_SIZE)
         safe_free(d->body);
-    linear_hash_remove(g_socks, sock);
+    linear_hash_remove(d->set->socks, sock);
 }
 
 uint vohttpd_decode_content_size(socket_data *d)
@@ -310,7 +319,7 @@ int vohttpd_http_file(socket_data *d, const char *path)
 
     total = vohttpd_file_size(path);
     if(total == -1)
-        return vohttpd_error_page(d, 404, NULL);
+        return d->set->error_page(d, 404, NULL);
 
     ext = vohttpd_file_extend(path);
     size = vohttpd_reply_head(buf, 200);
@@ -326,7 +335,7 @@ int vohttpd_http_file(socket_data *d, const char *path)
 
     fp = fopen(path, "rb");
     if(fp == NULL)
-        return vohttpd_error_page(d, 405, NULL);
+        return d->set->error_page(d, 405, NULL);
 
     while(!feof(fp)) {
         size = fread(buf, 1, SENDBUF_SIZE, fp);
@@ -372,42 +381,42 @@ int vohttpd_default(socket_data *d, string_reference *fn)
     char path[MESSAGE_SIZE];
 
     if(fn->size >= MESSAGE_SIZE)
-        return vohttpd_error_page(d, 413, NULL);
+        return d->set->error_page(d, 413, NULL);
     string_reference_dup(fn, head);
     if(strstr(head, ".."))
-        return vohttpd_error_page(d, 403, NULL);
+        return d->set->error_page(d, 403, NULL);
 
     if(head[fn->size - 1] == '/') {
-        sprintf(path, "%s/%sindex.html", vohttpd_setting.base, head);
+        sprintf(path, "%s/%sindex.html", g_set.base, head);
         if(vohttpd_file_size(path) != (uint)(-1)) {
             // there is index file in folder.
             return vohttpd_http_file(d, path);
         } else {
-            sprintf(path, "%s%s", vohttpd_setting.base, head);
+            sprintf(path, "%s%s", g_set.base, head);
             // no such index file, we try to load default, always show folder.
             return vohttpd_default_index(d, path);
         }
     }
 
     // the address might be a file.
-    sprintf(path, "%s%s", vohttpd_setting.base, head);
+    sprintf(path, "%s%s", g_set.base, head);
     return vohttpd_http_file(d, path);
 }
 
 int vohttpd_function(socket_data *d, string_reference *fn, string_reference *pa)
 {
     char name[FUNCTION_SIZE];
-    plugin_func func;
+    _plugin_func func;
 
     if(fn->size >= FUNCTION_SIZE)
-        return vohttpd_error_page(d, 413, NULL);
+        return d->set->error_page(d, 413, NULL);
     string_reference_dup(fn, name);
     if(strchr(name, '.') != NULL)   // this is library handle.
-        return vohttpd_error_page(d, 403, NULL);
+        return d->set->error_page(d, 403, NULL);
 
-    func = (plugin_func)string_hash_get(g_funcs, name);
+    func = (_plugin_func)string_hash_get(d->set->funcs, name);
     if(func == NULL)
-        return vohttpd_error_page(d, 404, NULL);
+        return d->set->error_page(d, 404, NULL);
     return func(d, pa);
 }
 
@@ -508,7 +517,7 @@ int vohttpd_filter(socket_data *d)
 {
     string_reference fn, pa;
 
-    if(vohttpd_filter_init && vohttpd_filter_init(d))
+    if(d->set->filter_init && ((_filter_init)d->set->filter_init)(d))
         return 0;
 
     if(memcmp(d->head, "GET", 3) == 0) {
@@ -524,7 +533,7 @@ int vohttpd_filter(socket_data *d)
             vohttpd_function(d, &fn, &pa);
             break; }
         default:
-            vohttpd_error_page(d, 404, NULL);
+            d->set->error_page(d, 404, NULL);
             break;
         }
     } else if(memcmp(d->head, "POST", 4) == 0) {
@@ -533,224 +542,129 @@ int vohttpd_filter(socket_data *d)
             vohttpd_function(d, &fn, &pa);
             break;
         default:
-            vohttpd_error_page(d, 404, NULL);
+            d->set->error_page(d, 404, NULL);
             break;
         }
     } else {
-        vohttpd_error_page(d, 501, NULL);
+        d->set->error_page(d, 501, NULL);
     }
 
     return 0;
 }
 
-int vohttpd_unload_library(socket_data *d, string_reference *pa)
+int vohttpd_error_page(socket_data *d, int code, const char *err)
 {
-    char path[MESSAGE_SIZE], name[FUNCTION_SIZE], buf[SENDBUF_SIZE];
+    char head[MESSAGE_SIZE], body[MESSAGE_SIZE];
+    const char *msg;
+    int  size, total = 0;
+
+    if(err == NULL)
+        err = "Sorry, I have tried my best... :'(";
+
+    msg = vohttpd_code_message(code);
+    total = sprintf(body,
+        "<html><head><title>%s</title></head><body style=\"font-family:%s;\">"
+        "<h1 style=\"color:#0040F0\">%d %s</h1><p style=\"font-size:14px;\">%s"
+        "</p></body></html>", msg, HTTP_FONT, code, msg, err);
+
+    size = vohttpd_reply_head(head, code);
+    size += sprintf(head + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
+    size += sprintf(head + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
+    size += sprintf(head + size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
+    strcat(head, "\r\n"); size += 2;
+
+    size = send(d->sock, head, size, 0);
+    if(size <= 0)
+        return -1;
+    total = send(d->sock, body, total, 0);
+    if(total <= 0)
+        return -1;
+    return total + size;
+}
+
+const char* vohttpd_unload_plugin(socket_data *d, const char *path)
+{
+    char name[FUNCTION_SIZE];
     void *h = NULL;
-    int size, total = 0;
 
-    plugin_query query;
-    plugin_cleanup clean;
-    plugin_func func;
+    _plugin_query query;
+    _plugin_func func;
+    _plugin_cleanup clean;
 
-    if(pa->size >= FUNCTION_SIZE)
-        return vohttpd_error_page(d, 413, "Library name is too long.");
-    string_reference_dup(pa, name);
-    h = (void *)string_hash_get(g_funcs, name);
+    if(get_name_from_path(path, name, FUNCTION_SIZE) >= FUNCTION_SIZE)
+        return "library name is too long.";
+    h = (void *)string_hash_get(d->set->funcs, name);
     if(h == NULL)
-        return vohttpd_error_page(d, 404, "Library has not been loaded.");
-    sprintf(path, "%s" HTTP_CGI_BIN "%s", vohttpd_setting.base, name);
+        return "library has not been loaded.";
 
     query = dlsym(h, LIBRARY_QUERY);
-    if(query == NULL)
-        return vohttpd_error_page(d, 404, "Can not find query interface.");
-    size = vohttpd_reply_head(buf, 200);
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONNECTION, "close");
-    strcat(buf + size, "\r\n"); size += 2;
-    size = send(d->sock, buf, size, 0);
+    if(query == NULL) {
+        dlclose(h);
+        return "can not find query interface.";
+    }
+    string_hash_remove(d->set->funcs, name);
 
-    size = sprintf(buf, "<html><head><title>Unload Library</title></head><body "
-        "style=\"font-family:%s\"><h1>%s</h1>", HTTP_FONT, name);
-    send(d->sock, buf, size, 0);        // just keep loading, do not check send.
-
-    string_hash_remove(g_funcs, name);
-    query(NULL, NULL);     // init library query.
-    while(func = (plugin_func)query(name, NULL), func) {
-        const char *status = "INVALID";
-        if(func = (plugin_func)dlsym(h, name), func == NULL) {
-            status = "<b style=\"color:#F04000\">NOT FOUND</b>";
-        } else {
-            if(func != (plugin_func)string_hash_get(g_funcs, name)) {
-                status = "<b style=\"color:#CC0000\">NOT EXIST</b>";
-            } else {
-                string_hash_remove(g_funcs, name);
-                status = "<b style=\"color:#CC9900\">REMOVED</b>";
-                total++;
-            }
-        }
-
-        size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b></p>", status, name);
-        send(d->sock, buf, size, 0);
+    query(NULL, NULL);
+    while(func = (_plugin_func)query(name, NULL), func) {
+        func = (_plugin_func)dlsym(h, name);
+        if(func == NULL)
+            continue;
+        if(func != (_plugin_func)string_hash_get(d->set->funcs, name))
+            continue;
+        string_hash_remove(d->set->funcs, name);
     }
 
     clean = dlsym(h, LIBRARY_CLEANUP);
     if(clean)
         clean();
 
-    size = sprintf(buf, "<p><b style=\"color:#339900\">The library has removed."
-        "</b></p></body></html>");
-    send(d->sock, buf, size, 0);
-
     dlclose(h);
-    return printf("[%s] UNLOAD SUCCESS\n%s\n", vohttpd_gmtime(), path);
+    return NULL;
 }
 
-int vohttpd_load_library(socket_data *d, string_reference *pa)
+const char* vohttpd_load_plugin(socket_data *d, const char *path)
 {
-    char path[MESSAGE_SIZE], name[FUNCTION_SIZE], buf[SENDBUF_SIZE];
-    const char *note;
+    char name[FUNCTION_SIZE];
     void *h = NULL;
-    int size, total = 0;
 
-    plugin_query query;
-    plugin_func func;
+    _plugin_query query;
+    _plugin_func func;
 
-    if(pa->size >= FUNCTION_SIZE)
-        return vohttpd_error_page(d, 413, "Library name is too long.");
-    string_reference_dup(pa, name);
-    if(strchr(name, '.') == NULL)
-        return vohttpd_error_page(d, 403, "Library name is not correct.");
-    if(string_hash_get(g_funcs, name))
-        return vohttpd_error_page(d, 403, "Library has already loaded.");
-    sprintf(path, "%s" HTTP_CGI_BIN "%s", vohttpd_setting.base, name);
+    if(get_name_from_path(path, name, FUNCTION_SIZE) >= FUNCTION_SIZE)
+        return "library name is too long.";
+    if(strchr(path, '.') == NULL)
+        return "library name is not correct.";
+    if(string_hash_get(d->set->funcs, name))
+        return "library has already loaded.";
 
     h = dlopen(path, RTLD_NOW);
     if(h == NULL)
-        return vohttpd_error_page(d, 404, dlerror());
-    if(string_hash_set(g_funcs, name, (uchar *)h) == NULL) {
+        return "can not find file.";
+    if(string_hash_set(d->set->funcs, name, (uchar *)h) == NULL) {
         dlclose(h);
-        return vohttpd_error_page(d, 413, "Sorry, hash is full.");
+        return "hash is full.";
     }
-
 
     query = dlsym(h, LIBRARY_QUERY);
     if(query == NULL) {
-        vohttpd_unload_library(d, pa);
-        return vohttpd_error_page(d, 404, "Can not find the library.");
+        vohttpd_unload_plugin(d, name);
+        dlclose(h);
+        return "can not find the library.";
     }
 
-    size = vohttpd_reply_head(buf, 200);
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONNECTION, "close");
-    strcat(buf + size, "\r\n"); size += 2;
-    size = send(d->sock, buf, size, 0);
-
-    size = sprintf(buf, "<html><head><title>Load Library</title></head><body "
-        "style=\"font-family:%s\"><h1>%s</h1>", HTTP_FONT, name);
-    send(d->sock, buf, size, 0);        // just keep loading, do not check send.
-
-    // call library query function, query libraries.
-    query(NULL, &note);     // init library query.
-    if(note != NULL) {
-        size = sprintf(buf, "<p><i style=\"font-size:14px;color:#999999\">%s"
-            "</i></p>", note);
-        send(d->sock, buf, size, 0);
-    }
-    while(func = (plugin_func)query(name, &note), func) {
-        const char *status = "INVALID";
-        if(func = (plugin_func)dlsym(h, name), func == NULL) {
-            status = "<b style=\"color:#F04000\">NOT FOUND</b>";
-        } else if(string_hash_get(g_funcs, name)) {
-            status = "<b style=\"color:#CC0000\">DUPLICATE</b>";
-        } else if(!string_hash_set(g_funcs, name, (uchar *)func)) {
-            status = "<b style=\"color:#00CC99\">HASH FULL</b>";
-        } else {
-            status = "<b style=\"color:#CC9900\">IMPLANTED</b>";
-            total++;
-        }
-
-        size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b>&nbsp&nbsp&nbsp"
-            "&nbsp&nbsp<i style=\"font-size:14px;color:#999999\">%s"
-            "</i></p>", status, name, note);
-        send(d->sock, buf, size, 0);
-    }
-    size = sprintf(buf, "<p><b style=\"color:#339900\">The library has loaded."
-        "</b></p></body></html>");
-    send(d->sock, buf, size, 0);
-    return printf("[%s] LOAD SUCCESS\n%s\n", vohttpd_gmtime(), path);
-}
-
-int vohttpd_query_library(socket_data *d, string_reference *pa)
-{
-    char name[FUNCTION_SIZE], buf[MESSAGE_SIZE];
-    uint i;
-    int size, tlib = 0, tfunc = 0;
-
-    size = vohttpd_reply_head(buf, 200);
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONNECTION, "close");
-    strcat(buf + size, "\r\n"); size += 2;
-    size = send(d->sock, buf, size, 0);
-
-    size = sprintf(buf, "<html><head><title>Query Library</title></head><body "
-        "style=\"font-family:%s\">", HTTP_FONT);
-    send(d->sock, buf, size, 0);        // just keep loading, do not check send.
-
-    for(i = 0; i < g_funcs->max; i++) {
-        uint pos = i * g_funcs->unit;
-        if(string_hash_empty(g_funcs, pos))
+    query(NULL, NULL);
+    while(func = (_plugin_func)query(name, NULL), func) {
+        if(string_hash_get(d->set->funcs, name))
             continue;
-        strcpy(name, string_hash_p1(g_funcs, pos));
-        if(strchr(name, '.')) {
-            plugin_func func;
-            plugin_query query;
-            const char *note;
-            void *h = (void *)string_hash_p2(g_funcs, pos);
-
-            if(pa->size && memcmp(pa->ref, name, pa->size))
-                continue;
-            size = sprintf(buf, "<h1>%s</h1>", name);
-            send(d->sock, buf, size, 0);
-            tlib++;
-
-            query = dlsym(h, LIBRARY_QUERY);
-            query(NULL, &note);
-            if(note != NULL) {
-                size = sprintf(buf, "<p><i style=\"font-size:14px;color:"
-                    "#999999\">%s</i></p>", note);
-                send(d->sock, buf, size, 0);
-            }
-            while(func = (plugin_func)query(name, &note), func) {
-                const char *status = "INVALID";
-                if(func = (plugin_func)dlsym(h, name), func == NULL) {
-                    status = "<b style=\"color:#F04000\">NOT FOUND</b>";
-                } else {
-                    if(func != (plugin_func)string_hash_get(g_funcs, name)) {
-                        status = "<b style=\"color:#CC0000\">NOT EXIST</b>";
-                    } else {
-                        status = "<b style=\"color:#CC9900\">IMPLANTED</b>";
-                        tfunc++;
-                    }
-                }
-                size = sprintf(buf, "<p>%s&nbsp&nbsp<b>%s</b>&nbsp&nbsp"
-                    "&nbsp&nbsp&nbsp<i style=\"font-size:14px;color:#999999\">"
-                    "%s</i></p>", status, name, note);
-                send(d->sock, buf, size, 0);
-            }
-
-            size = sprintf(buf, "<br><br>");
-            send(d->sock, buf, size, 0);
-        }
+        func = (_plugin_func)dlsym(h, name);
+        if(func == NULL)
+            continue;
+        if(!string_hash_set(d->set->funcs, name, (uchar *)func))
+            continue;
     }
 
-    size = sprintf(buf, "<p><b>Total Library: %d</b></p><p><b>Total Implanted: "
-        "%d</b></p></body></html>", tlib, tfunc);
-    send(d->sock, buf, size, 0);
-    return 0;
+    dlclose(h);
+    return NULL;
 }
 
 int main(int argc, char *argv[])
@@ -767,18 +681,18 @@ int main(int argc, char *argv[])
 
     switch(argc) {
     case 1:
-        vohttpd_setting.port = 8080;
-        vohttpd_setting.base = "/var/www/html";
+        g_set.port = 8080;
+        g_set.base = "/var/www/html";
         break;
 
     case 2:
-        vohttpd_setting.port = atoi(argv[1]);
-        vohttpd_setting.base = "/var/www/html";
+        g_set.port = atoi(argv[1]);
+        g_set.base = "/var/www/html";
         break;
 
     case 3:
-        vohttpd_setting.port = atoi(argv[1]);
-        vohttpd_setting.base = argv[2];
+        g_set.port = atoi(argv[1]);
+        g_set.base = argv[2];
         break;
 
     default:
@@ -787,13 +701,13 @@ int main(int argc, char *argv[])
     }
 
     // alloc buffer for globle pointer(maybe make them to static is better?)
-    g_funcs = string_hash_alloc(FUNCTION_SIZE, FUNCTION_COUNT);
-    g_socks = linear_hash_alloc(sizeof(socket_data), BUFFER_COUNT);
+    g_set.funcs = string_hash_alloc(FUNCTION_SIZE, FUNCTION_COUNT);
+    g_set.socks = linear_hash_alloc(sizeof(socket_data), BUFFER_COUNT);
 
-    // register basic functions here.
-    string_hash_set(g_funcs, "load_library", (uchar *)vohttpd_load_library);
-    string_hash_set(g_funcs, "unload_library", (uchar *)vohttpd_unload_library);
-    string_hash_set(g_funcs, "query_library", (uchar *)vohttpd_query_library);
+    // set default function callback.
+    g_set.error_page = vohttpd_error_page;
+    g_set.load_plugin = vohttpd_load_plugin;
+    g_set.unload_plugin = vohttpd_unload_plugin;
 
     // ignore the signal, or it will stop our server once client disconnected.
     signal(SIGPIPE, SIG_IGN);
@@ -801,7 +715,7 @@ int main(int argc, char *argv[])
     memset(&addr, 0, sizeof(struct sockaddr_in));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(vohttpd_setting.port);
+    addr.sin_port = htons(g_set.port);
     len = sizeof(struct sockaddr_in);
 
     socksrv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -825,8 +739,8 @@ int main(int argc, char *argv[])
 
         // queue the hash and pickout the max socket.
         sockmax = socksrv;
-        for(i = 0; i < g_socks->max; i++) {
-            d = (socket_data *)linear_hash_value(g_socks, i);
+        for(i = 0; i < g_set.socks->max; i++) {
+            d = (socket_data *)linear_hash_value(g_set.socks, i);
             sockmax = max(d->sock, sockmax);
             if(d->sock != (int)LINEAR_HASH_NULL)
                 FD_SET(d->sock, &fdr);
@@ -838,11 +752,11 @@ int main(int argc, char *argv[])
         count = select(sockmax + 1, &fdr, NULL, NULL, &tmv);
         if(count <= 0) {
             // clean up all sockets, they are time out.
-            for(i = 0; i < g_socks->max; i++) {
-                d = (socket_data *)linear_hash_value(g_socks, i);
+            for(i = 0; i < g_set.socks->max; i++) {
+                d = (socket_data *)linear_hash_value(g_set.socks, i);
                 if(d->sock == (int)LINEAR_HASH_NULL)
                     continue;
-                linear_hash_remove(g_socks, (uint)d->sock);
+                linear_hash_remove(g_set.socks, (uint)d->sock);
                 close(d->sock);
             }
             continue;
@@ -853,7 +767,7 @@ int main(int argc, char *argv[])
             memset(&addr, 0, sizeof(struct sockaddr_in));
 
             sock = accept(socksrv, (struct sockaddr*)&addr, &len);
-            d = (socket_data *)linear_hash_set(g_socks, (uint)sock);
+            d = (socket_data *)linear_hash_set(g_set.socks, (uint)sock);
             if(d == NULL) {
                 close(sock);     // no free buffer, maybe return error page here?
                 continue;
@@ -862,11 +776,11 @@ int main(int argc, char *argv[])
             d->sock = sock;
         }
 
-        for(i = 0; i < g_socks->max; i++) {
+        for(i = 0; i < g_set.socks->max; i++) {
             if(count <= 0)
                 break;
 
-            d = (socket_data *)linear_hash_value(g_socks, i);
+            d = (socket_data *)linear_hash_value(g_set.socks, i);
             if((uint)d->sock == LINEAR_HASH_NULL)
                 continue;
 
@@ -878,7 +792,7 @@ int main(int argc, char *argv[])
                     // receive http head data.
                     size = recv(d->sock, d->head + d->used, RECVBUF_SIZE - d->used, 0);
                     if(size <= 0) {
-                        socketdata_remove(g_socks, d->sock);
+                        socketdata_remove(g_set.socks, d->sock);
                         continue;
                     }
                     d->used += size;
@@ -888,8 +802,8 @@ int main(int argc, char *argv[])
                     p = strstr(d->head, HTTP_HEADER_END);
                     if(p == NULL) {
                         if(d->used >= RECVBUF_SIZE) {
-                            vohttpd_error_page(d, 413, NULL);
-                            socketdata_remove(g_socks, d->sock);
+                            g_set.error_page(d, 413, NULL);
+                            socketdata_remove(g_set.socks, d->sock);
                         }
                         // not get the header end, so we wait next recv.
                         continue;
@@ -902,7 +816,7 @@ int main(int argc, char *argv[])
                     d->size = vohttpd_decode_content_size(d);
                     if(d->size == 0) {// no content.
                         if(!vohttpd_filter(d))
-                            socketdata_remove(g_socks, d->sock);
+                            socketdata_remove(g_set.socks, d->sock);
                         // no body in this http request, it should be GET.
                         continue;
                     }
@@ -932,13 +846,13 @@ int main(int argc, char *argv[])
                     // receive http body data.
                     size = recv(d->sock, d->body + d->recv, d->size - d->recv, 0);
                     if(size <= 0) {
-                        socketdata_remove(g_socks, d->sock);
+                        socketdata_remove(g_set.socks, d->sock);
                         continue;
                     }
                     d->recv += size;
                     if(d->recv >= d->size) {
                         if(!vohttpd_filter(d))
-                            socketdata_remove(g_socks, d->sock);
+                            socketdata_remove(g_set.socks, d->sock);
                         continue;
                     }
                 }
@@ -949,8 +863,8 @@ int main(int argc, char *argv[])
     }
 
     close(socksrv);
-    safe_free(g_funcs);
-    safe_free(g_socks);
+    safe_free(g_set.funcs);
+    safe_free(g_set.socks);
     return 0;
 }
 
