@@ -15,7 +15,7 @@ PLUGINS = $(patsubst %.c,%.so,$(wildcard plugins/*.c))
 PLUGINS_C = vohttpdext.c
 PLUGINS_CFLAGS = -fPIC -shared 
 
-all: $(PROGRAM)
+all: $(PROGRAM) $(PLUGINS)
 
 
 %.o: %.c

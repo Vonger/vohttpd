@@ -16,6 +16,11 @@ extern "C" {
 #define LIBRARY_CLEANUP     "vohttpd_library_cleanup"
 #define VOHTTPD_NAME        "vohttpd v0.2"
 
+#define HTTP_CONTENT_LENGTH "Content-Length"
+#define HTTP_CONTENT_TYPE   "Content-Type"
+#define HTTP_DATE_TIME      "Date"
+#define HTTP_CONNECTION     "Connection"
+
 #define HTTP_CGI_BIN        "/cgi-bin/"
 #define vohttpd_unused(p)   ((void *)p)
 
@@ -38,12 +43,6 @@ typedef struct _string_reference {
     uint    size;           // size of the string.
 } string_reference;
 
-typedef struct _plugin_info {
-    void*       func;       // plugin function pointer.
-    const char* name;       // plugin function name.
-    const char* note;       // plugin function note/readme.
-} plugin_info;
-
 typedef struct _vohttpd vohttpd;
 typedef struct _socket_data {
     int   sock;
@@ -62,29 +61,35 @@ typedef struct _socket_data {
     vohttpd* set;       // pointer to global setting.
 } socket_data;
 
-// query exported functions in the plugin, plugin must have this interface.
-typedef void* (*_plugin_query)(char *func, const char **note);
-// clean up when the plugin is about to unload, not necessary.
-typedef int   (*_plugin_cleanup)();
+typedef struct _plugin_info {
+    const char*     name;       // plugin function name.
+    const char*     note;       // plugin function note/readme.
+} plugin_info;
+
 // exported functions interface must in this format.
 typedef int   (*_plugin_func)(socket_data *, string_reference *pa);
-// predeal function, every request will come to this, return 0 to continue.
-typedef int   (*_filter_init)(socket_data *);
+// query exported functions in the plugin, plugin must have this interface.
+typedef int   (*_plugin_query)(int, plugin_info *);
+// clean up when the plugin is about to unload, not necessary.
+typedef int   (*_plugin_cleanup)();
+
+// predeal function, every http request will come to this, return 0 to continue.
+typedef int   (*_http_filter)(socket_data *);
 // error page interface, used to customize error page.
 typedef int   (*_error_page)(socket_data *, int, const char *);
 
-typedef const char* (*_load_plugin)(socket_data *, const char *);
-typedef const char* (*_unload_plugin)(socket_data *, const char *);
+typedef const char* (*_load_plugin)(const char *);
+typedef const char* (*_unload_plugin)(const char *);
 
 struct _vohttpd {
     unsigned short port;            // default http server port.
-    char*          base;            // default http folder path.
+    const char*    base;            // default http folder path.
 
     linear_hash*   socks;           // store all accepted sockets.
     string_hash*   funcs;           // store all registered plugins(file, function).
 
     // common function hook.
-    _filter_init   filter_init;
+    _http_filter   http_filter;
     _error_page    error_page;
 
     _load_plugin   load_plugin;

@@ -14,6 +14,7 @@
 
 #define DATETIME_SIZE       32
 #define MIME_TYPE_SIZE      48
+#define LINEAR_HASH_NULL    ((uint)(-1))
 
 typedef struct _mime_node {
     const char *key;
@@ -60,7 +61,7 @@ const char *vohttpd_mime_map(const char *ext)
 {
     uint i, len;
     if(ext == NULL)
-        return "application/octet-stream";
+        return mime_nodes->type;
 
     len = strlen(ext);
     for(i = 0; i < sizeof(mime_nodes) / sizeof(mime_node); i++) {
@@ -68,7 +69,7 @@ const char *vohttpd_mime_map(const char *ext)
             continue;
         return mime_nodes[i].type;
     }
-    return "application/octet-stream";
+    return mime_nodes->type;
 }
 
 const char *vohttpd_code_message(int code)
