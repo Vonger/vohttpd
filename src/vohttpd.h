@@ -22,7 +22,9 @@ extern "C" {
 #define HTTP_CONNECTION     "Connection"
 
 #define HTTP_CGI_BIN        "/cgi-bin/"
+
 #define vohttpd_unused(p)   ((void *)p)
+#define safe_free(p)        if(p) { free(p); p = NULL; }
 
 typedef unsigned char uchar;
 typedef unsigned int  uint;
@@ -30,6 +32,7 @@ typedef unsigned int  uint;
 #define max(a, b)           ((a) > (b) ? (a) : (b))
 #define min(a, b)           ((a) < (b) ? (a) : (b))
 
+/* linear hash, every unit must start with its key. */
 typedef struct _linear_hash {
     uint   unit;            // the size for each unit.
     uint   max;             // the max allowed unit.
@@ -37,6 +40,25 @@ typedef struct _linear_hash {
     uchar  data[1];         // data buffer.
 }linear_hash;
 typedef linear_hash string_hash;
+
+#define LINEAR_HASH_NULL         ((uint)(-1))
+#define linear_hash_empty(h, p)  (linear_hash_key((h), (p)) == LINEAR_HASH_NULL)
+#define linear_hash_clear(h, p)  {linear_hash_key((h), (p)) = LINEAR_HASH_NULL;}
+#define string_hash_empty(h, p)  (*string_hash_key((h), (p)) == '\0')
+#define string_hash_clear(h, p)  {*string_hash_key((h), (p)) = '\0';}
+#define linear_hash_key(h, p)    (*(uint *)((h)->data + (p) * (h)->unit))
+#define linear_hash_val(h, p)    ((h)->data + (p) * (h)->unit)
+#define string_hash_key(h, p)    ((char *)(((h)->data + (p)) + sizeof(uchar *)))
+#define string_hash_val(h, p)    (*((uchar **)((h)->data + (p))))
+
+extern linear_hash* linear_hash_alloc(uint unit, uint max);
+extern uchar* linear_hash_get(linear_hash *lh, uint key);
+extern uchar* linear_hash_set(linear_hash *lh, uint key);
+extern void linear_hash_remove(linear_hash *lh, uint key);
+extern string_hash* string_hash_alloc(uint unit, uint max);
+extern uchar* string_hash_get(string_hash *sh, const char *key);
+extern uchar* string_hash_set(string_hash *sh, const char *key, uchar *value);
+extern void string_hash_remove(string_hash *sh, const char *key);
 
 typedef struct _string_reference {
     char*   ref;            // point to string start byte.
@@ -55,15 +77,15 @@ typedef struct _socket_data {
     // if in post mode the receive buffer exceed our head buffer size,
     // we alloc a buffer for the body.
     uint   size;        // max size of the body buffer.
-    uint   recv;        // received data size.
+    uint   recv;        // received body data size.
     char*  body;        // point to head + used if head buffer is enough.
 
     vohttpd* set;       // pointer to global setting.
 } socket_data;
 
 typedef struct _plugin_info {
-    const char*     name;       // plugin function name.
-    const char*     note;       // plugin function note/readme.
+    const char*     name;       // plugin function name, max 31 bytes.
+    const char*     note;       // plugin function note/readme, max 2047 bytes.
 } plugin_info;
 
 // exported functions interface must in this format.
@@ -105,6 +127,7 @@ extern int vohttpd_first_parameter(string_reference *s, string_reference *f);
 extern const char *vohttpd_code_message(int code);
 extern const char *vohttpd_mime_map(const char *ext);
 extern const char *vohttpd_gmtime();
+extern void vohttpd_error(const char *func, const char *msg);
 
 #ifdef __cplusplus
 }

@@ -12,175 +12,28 @@
 #include <stdlib.h>
 #include <memory.h>
 #include <stdio.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/select.h>
+#include <sys/signal.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <dlfcn.h>
 
 #include "vohttpd.h"
 
-#define safe_free(p)  if(p) { free(p); p = NULL; }
+#define HTTP_HEADER_END     "\r\n\r\n"
+#define HTTP_GET            "GET"
+#define HTTP_POST           "POST"
+#define HTTP_FONT           "Helvetica,Arial,sans-serif"
 
-/* linear hash, every unit must start with its key. */
-#define LINEAR_HASH_NULL         ((uint)(-1))
-#define linear_hash_key(h, p)    (*(uint *)((h)->data + (p) * (h)->unit))
-#define linear_hash_value(h, p)  ((h)->data + (p) * (h)->unit)
-#define linear_hash_empty(h, p)  (linear_hash_key((h), (p)) == LINEAR_HASH_NULL)
-#define linear_hash_clear(h, p)  {linear_hash_key((h), (p)) = LINEAR_HASH_NULL;}
+#define TIMEOUT             3000
 
-linear_hash* linear_hash_alloc(uint unit, uint max)
-{
-    linear_hash *lh =
-        (linear_hash *)malloc(max * unit + sizeof(linear_hash));
-    if(lh == NULL)
-        return NULL;
-
-    lh->unit = unit;
-    lh->max = max;
-
-    while(max--)
-        linear_hash_clear(lh, max);
-    return lh;
-}
-
-uchar* linear_hash_get(linear_hash *lh, uint key)
-{
-    uint pos = key % lh->max, i;
-    // match node in the first hit.
-    if(linear_hash_key(lh, pos) == key)
-        return linear_hash_value(lh, pos);
-
-    // try to hit next node if we miss the first.
-    for(i = pos + 1; ; i++) {
-        if(i >= lh->max)
-            i = 0;
-        if(i == pos)
-            break;
-
-        if(linear_hash_key(lh, i) == key)
-            return linear_hash_value(lh, i);
-    }
-    return NULL;
-}
-
-uchar* linear_hash_set(linear_hash *lh, uint key)
-{
-    uint pos = key % lh->max, i;
-    // first hit, this hash node is empty.
-    if(linear_hash_empty(lh, pos))
-        return linear_hash_value(lh, pos);
-
-    // try to find another empty node.
-    for(i = pos + 1; ; i++) {
-        if(i >= lh->max)
-            i = 0;
-        if(i == pos)
-            break;
-
-        if(linear_hash_empty(lh, i))
-            return linear_hash_value(lh, i);
-    }
-    return NULL;
-}
-
-void linear_hash_remove(linear_hash *lh, uint key)
-{
-    uchar* d = linear_hash_get(lh, key);
-    if(d == NULL)
-        return;
-    linear_hash_clear(lh, (d - lh->data) / lh->unit);
-}
-
-
-/* string hash, get data by string, make it faster. */
-#define string_hash_key(h, p)    ((char *)(((h)->data + (p)) + sizeof(uchar *)))
-#define string_hash_val(h, p)    (*((uchar **)((h)->data + (p))))
-#define string_hash_empty(h, p)  (*string_hash_key((h), (p)) == '\0')
-#define string_hash_clear(h, p)  {*string_hash_key((h), (p)) = '\0';}
-
-string_hash* string_hash_alloc(uint unit, uint max)
-{
-    string_hash *sh = (string_hash *)
-        malloc(max * (unit + sizeof(uchar *)) + sizeof(string_hash));
-    if(sh == NULL)
-        return NULL;
-    memset(sh, 0, max * (unit + sizeof(uchar *)) + sizeof(string_hash));
-
-    sh->unit = unit + sizeof(uchar *);
-    sh->max = max;
-    return sh;
-}
-
-uint string_hash_from(const char *str)
-{
-    uint hash = *str;
-    while(*str++)
-        hash = hash * 31 + *str;
-    return hash;
-}
-
-uchar* string_hash_get(string_hash *sh, const char *key)
-{
-    uint pos = (string_hash_from(key) % sh->max) * sh->unit, i;
-    // match node in the first hit.
-    if(strcmp(string_hash_key(sh, pos), key) == 0)
-        return string_hash_val(sh, pos);
-
-    // try to hit next node if we miss the first.
-    for(i = pos + sh->unit;; i += sh->unit) {
-        if(i >= sh->unit * sh->max)
-            i = 0;
-        if(i == pos)
-            break;
-        if(strcmp(string_hash_key(sh, i), key) == 0)
-            return string_hash_val(sh, i);
-    }
-    return NULL;
-}
-
-uchar* string_hash_set(string_hash *sh, const char *key, uchar *value)
-{
-    uint pos = (string_hash_from(key) % sh->max) * sh->unit, i;
-    // first hit, this hash node is empty.
-    if(string_hash_empty(sh, pos)) {
-        strcpy(string_hash_key(sh, pos), key);
-        memcpy(&string_hash_val(sh, pos), &value, sizeof(uchar *));
-        return string_hash_val(sh, pos);
-    }
-
-    // try to find another empty node.
-    for(i = pos + sh->unit;; i += sh->unit) {
-        if(i >= sh->unit * sh->max)
-            i = 0;
-        if(i == pos)
-            break;
-
-        if(string_hash_empty(sh, i)) {
-            strcpy(string_hash_key(sh, i), key);
-            memcpy(&string_hash_val(sh, i), &value, sizeof(uchar *));
-            return string_hash_val(sh, i);
-        }
-    }
-    return NULL;
-}
-
-void string_hash_remove(string_hash *sh, const char *key)
-{
-    uint pos = (string_hash_from(key) % sh->max) * sh->unit, i;
-    // match node in the first hit.
-    if(strcmp(string_hash_key(sh, pos), key) == 0) {
-        string_hash_clear(sh, pos);
-        return;
-    }
-
-    // try to hit next node if we miss the first.
-    for(i = pos + sh->unit;; i += sh->unit) {
-        if(i >= sh->unit * sh->max)
-            i = 0;
-        if(i == pos)
-            break;
-        if(strcmp(string_hash_key(sh, i), key) == 0) {
-            string_hash_clear(sh, i);
-            return;
-        }
-    }
-}
+static vohttpd g_set;
 
 int get_name_from_path(const char *path, char *name, size_t size)
 {
@@ -197,28 +50,6 @@ int get_name_from_path(const char *path, char *name, size_t size)
     strncpy(name, p, size);
     return strlen(p);
 }
-
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/select.h>
-#include <sys/signal.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <dlfcn.h>
-
-#define HTTP_HEADER_END     "\r\n\r\n"
-#define HTTP_GET            "GET"
-#define HTTP_POST           "POST"
-#define HTTP_FONT           "Helvetica,Arial,sans-serif"
-
-#define TIMEOUT             3000
-
-static vohttpd g_set;
-
 
 socket_data* socketdata_new(linear_hash *socks, int sock)
 {
@@ -238,10 +69,10 @@ void socketdata_delete(linear_hash *socks, int sock)
 {
     socket_data *d = (socket_data *)linear_hash_get(socks, sock);
     close(sock);
+    // TODO(map file): delete the map file in tmp folder.
     // check if the body point to head, if so we do not release it.
     if(d->body && (d->body < d->head || d->body >= d->head + RECVBUF_SIZE))
-        safe_free(d->body);
-
+        safe_free(d->body);     // this should move outside.
     linear_hash_remove(socks, sock);
 }
 
@@ -294,10 +125,10 @@ int vohttpd_http_file(socket_data *d, const char *path)
 
     ext = vohttpd_file_extend(path);
     size = vohttpd_reply_head(buf, 200);
-    size += sprintf(buf + size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map(ext));
-    size += sprintf(buf + size, "%s: %s\r\n", HTTP_CONNECTION, "close");
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map(ext));
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %s\r\n", HTTP_CONNECTION, "close");
     strcat(buf + size, "\r\n"); size += 2;
 
     size = send(d->sock, buf, size, 0);
@@ -333,19 +164,19 @@ int vohttpd_default(socket_data *d, string_reference *fn)
         return d->set->error_page(d, 403, NULL);
 
     if(head[fn->size - 1] == '/') {
-        sprintf(path, "%s/%sindex.html", g_set.base, head);
+        snprintf(path, MESSAGE_SIZE, "%s/%sindex.html", g_set.base, head);
         if(vohttpd_file_size(path) != (uint)(-1)) {
             // there is index file in folder.
             return vohttpd_http_file(d, path);
         } else {
-            sprintf(path, "%s%s", g_set.base, head);
+            snprintf(path, MESSAGE_SIZE, "%s%s", g_set.base, head);
             // no such index file, we try to load default, always show folder.
             return d->set->error_page(d, 501, NULL);
         }
     }
 
     // the address might be a file.
-    sprintf(path, "%s%s", g_set.base, head);
+    snprintf(path, MESSAGE_SIZE, "%s%s", g_set.base, head);
     return vohttpd_http_file(d, path);
 }
 
@@ -504,15 +335,15 @@ int vohttpd_error_page(socket_data *d, int code, const char *err)
         err = "Sorry, I have tried my best... :'(";
 
     msg = vohttpd_code_message(code);
-    total = sprintf(body,
+    total = snprintf(body, MESSAGE_SIZE,
         "<html><head><title>%s</title></head><body style=\"font-family:%s;\">"
         "<h1 style=\"color:#0040F0\">%d %s</h1><p style=\"font-size:14px;\">%s"
         "</p></body></html>", msg, HTTP_FONT, code, msg, err);
 
     size = vohttpd_reply_head(head, code);
-    size += sprintf(head + size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
-    size += sprintf(head + size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
-    size += sprintf(head + size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
+    size += snprintf(head + size, MESSAGE_SIZE - size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
+    size += snprintf(head + size, MESSAGE_SIZE - size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
+    size += snprintf(head + size, MESSAGE_SIZE - size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
     strcat(head, "\r\n"); size += 2;
 
     size = send(d->sock, head, size, 0);
@@ -580,11 +411,11 @@ const char* vohttpd_load_plugin(const char *path)
 
     h = dlopen(path, RTLD_NOW);
     if(h == NULL)
-        return "can not find file.";
+        return dlerror();
     query = dlsym(h, LIBRARY_QUERY);
     if(query == NULL) {
         dlclose(h);
-        return "can not find the library.";
+        return dlerror();
     }
     if(string_hash_set(g_set.funcs, name, (uchar *)h) == NULL) {
         dlclose(h);
@@ -599,7 +430,6 @@ const char* vohttpd_load_plugin(const char *path)
             continue;       // already exists same name interface.
         if(!string_hash_set(g_set.funcs, info.name, (uchar *)func))
             continue;       // hash full?
-        printf("func: %s %016lX\n", info.name, (unsigned long)func);
     }
     return NULL;
 }
@@ -672,7 +502,7 @@ void vohttpd_loop()
         // queue the hash and pickout the max socket.
         sockmax = socksrv;
         for(i = 0; i < g_set.socks->max; i++) {
-            d = (socket_data *)linear_hash_value(g_set.socks, i);
+            d = (socket_data *)linear_hash_val(g_set.socks, i);
             sockmax = max(d->sock, sockmax);
             if(d->sock != (int)LINEAR_HASH_NULL)
                 FD_SET(d->sock, &fdr);
@@ -685,7 +515,7 @@ void vohttpd_loop()
         if(count <= 0) {
             // clean up all sockets, they are time out.
             for(i = 0; i < g_set.socks->max; i++) {
-                d = (socket_data *)linear_hash_value(g_set.socks, i);
+                d = (socket_data *)linear_hash_val(g_set.socks, i);
                 if(d->sock == (int)LINEAR_HASH_NULL)
                     continue;
                 socketdata_delete(g_set.socks, d->sock);
@@ -706,7 +536,7 @@ void vohttpd_loop()
             if(count <= 0)
                 break;
 
-            d = (socket_data *)linear_hash_value(g_set.socks, i);
+            d = (socket_data *)linear_hash_val(g_set.socks, i);
             if((uint)d->sock == LINEAR_HASH_NULL)
                 continue;
 
@@ -727,6 +557,8 @@ void vohttpd_loop()
                     // if new recv size > 4, we can check new recv.
                     p = strstr(d->head, HTTP_HEADER_END);
                     if(p == NULL) {
+                        // we have filled the buffer but still not get the end of head,
+                        // the head size exceeds the allowed size, return error.
                         if(d->used >= RECVBUF_SIZE) {
                             g_set.error_page(d, 413, NULL);
                             socketdata_delete(g_set.socks, d->sock);
@@ -738,9 +570,10 @@ void vohttpd_loop()
                     p += sizeof(HTTP_HEADER_END) - 1;
 
                     // now check the content size.
-                    d->recv = p - d->head;
+                    d->recv = d->head + d->used - p;
+                    d->body = p;
                     d->size = vohttpd_decode_content_size(d);
-                    if(d->size == 0) {// no content.
+                    if(d->size == 0 || d->recv >= d->size) {  // no content or already get full data.
                         if(!g_set.http_filter(d))
                             socketdata_delete(g_set.socks, d->sock);
                         // no body in this http request, it should be GET.
@@ -750,7 +583,7 @@ void vohttpd_loop()
                     // the head buffer can not contain the body data(too big)
                     // we have to alloc memory for it.
                     //
-                    // TODO: change this part to file mapping might be better.
+                    // TODO(map file): change this part to file mapping might be better.
                     // in most situation, embed device do not have to transfer
                     // much data unless receiving a file, so file mapping will
                     // save a lot of memory and save cost on store file.
@@ -758,11 +591,11 @@ void vohttpd_loop()
                     // temp.[sock], once the socket is closed, delete that temp
                     // file. In plugin, we can move that file to another folder
                     // when we get full of it to save upload file.
-                    // add a function: vohttpd_temp_filename(socket_data)
-                    if(d->size > RECVBUF_SIZE - d->used + d->recv) {
-                        d->body = malloc(d->size);
-                        memset(d->body, 0, d->size);
-                        memcpy(d->body, d->head, d->recv);
+                    if(d->size - d->recv > RECVBUF_SIZE - d->used) {
+                        d->body = (char *)malloc(d->size);
+                        // TODO(map file): create a map file in tmp folder.
+                        memcpy(d->body, p, d->recv);
+                        memset(p, 0, d->recv); // clean head, easy to debug.
 
                         // now we should goto body data receive process.
                     }
@@ -776,6 +609,7 @@ void vohttpd_loop()
                         continue;
                     }
                     d->recv += size;
+
                     if(d->recv >= d->size) {
                         if(!g_set.http_filter(d))
                             socketdata_delete(g_set.socks, d->sock);

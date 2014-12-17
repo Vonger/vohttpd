@@ -7,10 +7,162 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/time.h>
 #include <sys/socket.h>
 
 #include "vohttpd.h"
+
+linear_hash* linear_hash_alloc(uint unit, uint max)
+{
+    linear_hash *lh =
+        (linear_hash *)malloc(max * unit + sizeof(linear_hash));
+    if(lh == NULL)
+        return NULL;
+
+    lh->unit = unit;
+    lh->max = max;
+
+    while(max--)
+        linear_hash_clear(lh, max);
+    return lh;
+}
+
+uchar* linear_hash_get(linear_hash *lh, uint key)
+{
+    uint pos = key % lh->max, i;
+    // match node in the first hit.
+    if(linear_hash_key(lh, pos) == key)
+        return linear_hash_val(lh, pos);
+
+    // try to hit next node if we miss the first.
+    for(i = pos + 1; ; i++) {
+        if(i >= lh->max)
+            i = 0;
+        if(i == pos)
+            break;
+
+        if(linear_hash_key(lh, i) == key)
+            return linear_hash_val(lh, i);
+    }
+    return NULL;
+}
+
+uchar* linear_hash_set(linear_hash *lh, uint key)
+{
+    uint pos = key % lh->max, i;
+    // first hit, this hash node is empty.
+    if(linear_hash_empty(lh, pos))
+        return linear_hash_val(lh, pos);
+
+    // try to find another empty node.
+    for(i = pos + 1; ; i++) {
+        if(i >= lh->max)
+            i = 0;
+        if(i == pos)
+            break;
+
+        if(linear_hash_empty(lh, i))
+            return linear_hash_val(lh, i);
+    }
+    return NULL;
+}
+
+void linear_hash_remove(linear_hash *lh, uint key)
+{
+    uchar* d = linear_hash_get(lh, key);
+    if(d == NULL)
+        return;
+    linear_hash_clear(lh, (d - lh->data) / lh->unit);
+}
+
+string_hash* string_hash_alloc(uint unit, uint max)
+{
+    string_hash *sh = (string_hash *)
+        malloc(max * (unit + sizeof(uchar *)) + sizeof(string_hash));
+    if(sh == NULL)
+        return NULL;
+    memset(sh, 0, max * (unit + sizeof(uchar *)) + sizeof(string_hash));
+
+    sh->unit = unit + sizeof(uchar *);
+    sh->max = max;
+    return sh;
+}
+
+uint string_hash_from(const char *str)
+{
+    uint hash = *str;
+    while(*str++)
+        hash = hash * 31 + *str;
+    return hash;
+}
+
+uchar* string_hash_get(string_hash *sh, const char *key)
+{
+    uint pos = (string_hash_from(key) % sh->max) * sh->unit, i;
+    // match node in the first hit.
+    if(strcmp(string_hash_key(sh, pos), key) == 0)
+        return string_hash_val(sh, pos);
+
+    // try to hit next node if we miss the first.
+    for(i = pos + sh->unit;; i += sh->unit) {
+        if(i >= sh->unit * sh->max)
+            i = 0;
+        if(i == pos)
+            break;
+        if(strcmp(string_hash_key(sh, i), key) == 0)
+            return string_hash_val(sh, i);
+    }
+    return NULL;
+}
+
+uchar* string_hash_set(string_hash *sh, const char *key, uchar *value)
+{
+    uint pos = (string_hash_from(key) % sh->max) * sh->unit, i;
+    // first hit, this hash node is empty.
+    if(string_hash_empty(sh, pos)) {
+        strcpy(string_hash_key(sh, pos), key);
+        memcpy(&string_hash_val(sh, pos), &value, sizeof(uchar *));
+        return string_hash_val(sh, pos);
+    }
+
+    // try to find another empty node.
+    for(i = pos + sh->unit;; i += sh->unit) {
+        if(i >= sh->unit * sh->max)
+            i = 0;
+        if(i == pos)
+            break;
+
+        if(string_hash_empty(sh, i)) {
+            strcpy(string_hash_key(sh, i), key);
+            memcpy(&string_hash_val(sh, i), &value, sizeof(uchar *));
+            return string_hash_val(sh, i);
+        }
+    }
+    return NULL;
+}
+
+void string_hash_remove(string_hash *sh, const char *key)
+{
+    uint pos = (string_hash_from(key) % sh->max) * sh->unit, i;
+    // match node in the first hit.
+    if(strcmp(string_hash_key(sh, pos), key) == 0) {
+        string_hash_clear(sh, pos);
+        return;
+    }
+
+    // try to hit next node if we miss the first.
+    for(i = pos + sh->unit;; i += sh->unit) {
+        if(i >= sh->unit * sh->max)
+            i = 0;
+        if(i == pos)
+            break;
+        if(strcmp(string_hash_key(sh, i), key) == 0) {
+            string_hash_clear(sh, i);
+            return;
+        }
+    }
+}
 
 #define DATETIME_SIZE       32
 #define MIME_TYPE_SIZE      48
@@ -25,6 +177,7 @@ static mime_node mime_nodes[] = {
     { "html", "text/html" },
     { "css", "text/css" },
     { "js", "application/x-javascript" },
+    { "json", "application/json" },
     { "gif", "image/gif" },
     { "jpg", "image/jpeg" },
     { "png", "image/png" },
@@ -151,4 +304,9 @@ int vohttpd_uri_first_parameter(string_reference *s, string_reference *first)
         p++;
     }
     return 0;
+}
+
+void vohttpd_error(const char *func, const char *msg)
+{
+    printf("[%s]%s\n", func, msg);
 }
