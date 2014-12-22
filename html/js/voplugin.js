@@ -47,7 +47,7 @@ function voplugin_refresh() {
 
             $("#voplugin-detail-dialog-" + name).remove();
             interface_list = vohttpd_call("plugin_list_interface", $(this).attr("name"));
-            if(interface_list.status != "success")
+            if(interface_list.status !== "success")
                 vohttpd_message("<div style=\"color:#F00\">ERROR</div>", interface_list.status);
 
             html = "<div class=\"modal fade\" id=\"voplugin-detail-dialog-" + name + "\" tabindex=\"-1\" role=\"dialog\">";
@@ -56,7 +56,7 @@ function voplugin_refresh() {
             html += "<h4 class=\"modal-title\" id=\"voplugin-modal-title\">" + plugin + "</h4></div>";
             html += "<table class=\"table modal-body\"><tbody id=\"voplugin-detail-table\">";
             for(id = 0; id < interface_list.interfaces.length; id++) {
-                status = interface_list.interfaces[id].status == "loaded" ? "success" : "danger";
+                status = interface_list.interfaces[id].status === "loaded" ? "success" : "danger";
                 html += "<tr>";
                 html += "<td><h5>" + interface_list.interfaces[id].name + "</h5></td>";
                 html += "<td><p class=\"help-block\">" + interface_list.interfaces[id].note + "</p></td>";
@@ -80,15 +80,32 @@ function voplugin_init() {
     $("#" + id_body).append(html);
 
     html = "<h4>Install</h4>";
-    html += "<form action=\"cgi-bin/plugin_install\" method=\"post\" enctype =\"multipart/form-data\">"
-    html += "<input id=\"vohttp-file-input\" type=\"file\" name=\"filename\" style=\"display:none\">";
-    html += "<div class=\"input-group\"><input id=\"vohttp-file-input-fake\" type=\"text\" class=\"form-control\">";
-    html += "<span class=\"input-group-btn\"><button class=\"btn btn-default\" type=\"button\" onclick=\"$('input[id=vohttp-file-input]').click();\">Choose</button>";
+    html += "<form id=\"voplugin-install-form\" action=\"cgi-bin/plugin_install\" method=\"post\" enctype =\"multipart/form-data\">"
+    html += "<input id=\"voplugin-file-input\" type=\"file\" name=\"filename\" style=\"display:none\">";
+    html += "<div class=\"input-group\"><input id=\"voplugin-file-input-alter\" readonly=\"readonly\" type=\"text\" class=\"form-control\">";
+    html += "<span class=\"input-group-btn\"><button class=\"btn btn-default\" type=\"button\" onclick=\"$('input[id=voplugin-file-input]').click();\">Choose</button>";
     html += "<button class=\"btn btn-primary\" type=\"submit\">Upload & Install</button></span></div></form>";
     $("#" + id_body).append(html);
 
-    $("#vohttp-file-input").change(function() {
-      $("#vohttp-file-input-fake").val($(this).val());
+    $("#voplugin-file-input").change(function() {
+        $("#voplugin-file-input-alter").val($(this).val());
+    });
+
+    $("#voplugin-install-form").on("submit", function(event) {
+        event.preventDefault();
+
+        var files = $("#voplugin-file-input").prop("files");
+        var name = $("#voplugin-file-input").prop("name");
+        var form_data = new FormData();
+        form_data.append(name, files[0]);
+
+        var raw = $.ajax({
+            url:$(this).attr("action"), type:$(this).attr("method"),
+            beforeSend:function(jq, opt) { opt.data = form_data; },
+            async:false,
+        });
+        vohttpd_message("Notify", $.parseJSON(raw.responseText).status);
+        voplugin_refresh();
     });
 
     voplugin_refresh();

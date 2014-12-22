@@ -236,7 +236,7 @@ int plugin_install(socket_data *d, string_reference *pa)
     // get boundary.
     p = strstr(pa->ref, "\r\n");
     if(p == NULL)
-        return -1;
+        return plugin_json_status(d, "data is not correct.");
     if(p - pa->ref >= MESSAGE_SIZE)
         return plugin_json_status(d, "boundary is too long.");
     memcpy(boundary, pa->ref, p - pa->ref);

@@ -1,5 +1,5 @@
 function vohttpd_message(title, text, id, btn1, p1, btn2, p2) {
-    if(id == null)
+    if(id === null)
         id = "vohttpd-message";
     $("#" + id).remove();
 
@@ -16,9 +16,9 @@ function vohttpd_message(title, text, id, btn1, p1, btn2, p2) {
     html += "<p>" + text + "</p>";
     html += "<div style=\"border-top:0px\" class=\"modal-footer\">";
 
-    if(btn1 != null)
+    if(btn1 && p1)
         html += "<button " + p1 + " type=\"button\" class=\"btn btn-primary\" data-dismiss=\"modal\">" + btn1 + "</button>";
-    if(btn2 != null)
+    if(btn2 && p2)
         html += "<button " + p2 + " type=\"button\" class=\"btn btn-primary\" data-dismiss=\"modal\">" + btn2 + "</button>";
 
     html += "<button type=\"button\" class=\"btn btn-default\" data-dismiss=\"modal\">Close</button></div>";
@@ -30,11 +30,11 @@ function vohttpd_message(title, text, id, btn1, p1, btn2, p2) {
 
 function vohttpd_call(name, param) {
     var raw;
-    if(param == null)
+    if(param === null)
         raw = $.ajax({url:"/cgi-bin/" + name, async:false});
     else
         raw = $.ajax({url:"/cgi-bin/" + name + "?" + param, async:false});
-    return eval("(" + raw.responseText + ")");
+    return $.parseJSON(raw.responseText);
 }
 
 function vohttpd_create_panel(title, id, id_body) {
