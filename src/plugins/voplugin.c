@@ -8,7 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <dlfcn.h>
-#include <sys/socket.h>
+#include <unistd.h>
+#include <sys/mman.h>
 
 #include "../vohttpd.h"
 
@@ -37,10 +38,10 @@ int plugin_json_status(socket_data *d, const char *status)
     size += snprintf(head + size, MESSAGE_SIZE, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
     strcat(head + size, "\r\n"); size += 2;
 
-    size = send(d->sock, head, size, 0);
+    size = d->set->send(d->sock, head, size, 0);
     if(size <= 0)
         return -1;
-    size = send(d->sock, buf, total, 0);
+    size = d->set->send(d->sock, buf, total, 0);
     if(size <= 0)
         return -1;
     return 0;
@@ -96,10 +97,10 @@ int plugin_list(socket_data *d, string_reference *pa)
     size += snprintf(head + size, MESSAGE_SIZE, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
     strcat(head + size, "\r\n"); size += 2;
 
-    size = send(d->sock, head, size, 0);
+    size = d->set->send(d->sock, head, size, 0);
     if(size <= 0)
         return -1;
-    size = send(d->sock, buf, total, 0);
+    size = d->set->send(d->sock, buf, total, 0);
     if(size <= 0)
         return -1;
     return 0;
@@ -119,7 +120,7 @@ int plugin_list_interface(socket_data *d, string_reference *pa)
 {
     char head[MESSAGE_SIZE], buf[SENDBUF_SIZE];
     char name[FUNCTION_SIZE] = {0};
-    int size = 0, total = 0, i;
+    int size = 0, total = 0, count = 0, i;
 
     if(pa != NULL) {
         if(pa->size <= 0)
@@ -140,6 +141,7 @@ int plugin_list_interface(socket_data *d, string_reference *pa)
 
         if(strcmp(key, name))
             continue;
+        count++;
 
         total += snprintf(buf + total, SENDBUF_SIZE - total, "{\"status\":\"success\",");
         query = dlsym(h, LIBRARY_QUERY);
@@ -167,6 +169,8 @@ int plugin_list_interface(socket_data *d, string_reference *pa)
         strcat(buf, "]}");
         total += 2;
     }
+    if(count == 0)
+        total = snprintf(buf, SENDBUF_SIZE, "{\"status\":\"no matched plugin.\"}");
 
     size += vohttpd_reply_head(head, 200);
     size += snprintf(head + size, MESSAGE_SIZE, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("json"));
@@ -174,10 +178,10 @@ int plugin_list_interface(socket_data *d, string_reference *pa)
     size += snprintf(head + size, MESSAGE_SIZE, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
     strcat(head + size, "\r\n"); size += 2;
 
-    size = send(d->sock, head, size, 0);
+    size = d->set->send(d->sock, head, size, 0);
     if(size <= 0)
         return -1;
-    size = send(d->sock, buf, total, 0);
+    size = d->set->send(d->sock, buf, total, 0);
     if(size <= 0)
         return -1;
     return 0;
@@ -210,6 +214,8 @@ int plugin_unload(socket_data *d, string_reference *pa)
     if(memstr(pa->ref, pa->size, "/") || memstr(pa->ref, pa->size, "\\"))
         return plugin_json_status(d, "plugin name is incorrect.");
     string_reference_dup(pa, name);
+    if(!strcmp(name, "voplugin.so"))
+        return plugin_json_status(d, "can not unload current running plugin.");
 
     msg = d->set->unload_plugin(name);
     return plugin_json_status(d, msg == NULL ? "success" : msg);
@@ -226,7 +232,6 @@ int plugin_install(socket_data *d, string_reference *pa)
     char boundary[MESSAGE_SIZE] = {0}, *p, *e;
     char name[FUNCTION_SIZE] = {0};
     const char *msg;
-    FILE *fp;
 
     // get boundary.
     p = strstr(pa->ref, "\r\n");
@@ -247,6 +252,8 @@ int plugin_install(socket_data *d, string_reference *pa)
     if(e - p >= FUNCTION_SIZE)
         return plugin_json_status(d, "plugin name is too long.");
     memcpy(name, p, e - p);
+    if(string_hash_get(d->set->funcs, name) != NULL)
+        return plugin_json_status(d, "unload exists plugin first.");
 
     // get file data, store to local.
     p = strstr(e, "\r\n\r\n");
@@ -260,11 +267,29 @@ int plugin_install(socket_data *d, string_reference *pa)
         return plugin_json_status(d, "no end of content.");
 
     // write file to local.
-    fp = fopen(name, "wb");
-    if(fp == NULL)
-        return plugin_json_status(d, "can not open file.");
-    fwrite(p, 1, e - p - 2, fp);
-    fclose(fp);
+    switch(d->type) {
+    case SOCKET_DATA_MMAP: {  // mmap memory
+        char map[MESSAGE_SIZE];
+        snprintf(map, MESSAGE_SIZE, MMAP_FILE_NAME, d->sock);
+
+        memmove(d->body, p, e - p - 2);
+        msync(d->body, e - p - 2, MS_SYNC);
+        munmap(d->body, d->size);
+
+        // set buffer to NULL to avoid pointer issue.
+        d->body = NULL;
+        truncate(map, e - p - 2);  // resize the file.
+        rename(map, name);
+        break; }
+
+    case SOCKET_DATA_STACK: {
+        FILE *fp = fopen(name, "wb");
+        if(fp == NULL)
+            return plugin_json_status(d, "can not open file.");
+        fwrite(p, 1, e - p - 2, fp);
+        fclose(fp);
+        break; }
+    }
 
     // load plugin to vphttpd.
     msg = d->set->load_plugin(name);
@@ -283,6 +308,8 @@ int plugin_uninstall(socket_data *d, string_reference *pa)
     if(pa->size >= FUNCTION_SIZE)
         return plugin_json_status(d, "plugin name is too long.");
     string_reference_dup(pa, name);
+    if(!strcmp(name, "voplugin.so"))
+        return plugin_json_status(d, "can not unload current running plugin.");
 
     msg = d->set->unload_plugin(name);
     if(msg == NULL)
@@ -293,7 +320,7 @@ int plugin_uninstall(socket_data *d, string_reference *pa)
 int vohttpd_library_query(int id, plugin_info *out)
 {
     static plugin_info info[] = {
-    { ".note", "http plugin control interface, return data in json format." },
+    { ".", "http plugin control interface, return data in json format." },
     { "plugin_list", "list all loaded plugins." },
     { "plugin_list_interface", "list all functions by the plugin name." },
     { "plugin_load", "load plugin by its name, search cgi-bin first, then vohttpd default plugin folder." },

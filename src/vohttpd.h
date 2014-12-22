@@ -20,8 +20,8 @@ extern "C" {
 #define HTTP_CONTENT_TYPE   "Content-Type"
 #define HTTP_DATE_TIME      "Date"
 #define HTTP_CONNECTION     "Connection"
-
 #define HTTP_CGI_BIN        "/cgi-bin/"
+#define MMAP_FILE_NAME      "mmap.%d"
 
 #define vohttpd_unused(p)   ((void *)p)
 #define safe_free(p)        if(p) { free(p); p = NULL; }
@@ -66,6 +66,13 @@ typedef struct _string_reference {
 } string_reference;
 
 typedef struct _vohttpd vohttpd;
+
+enum SOCKET_DATA_TYPE {
+    SOCKET_DATA_NULL,
+    SOCKET_DATA_STACK,
+    SOCKET_DATA_MMAP,
+};
+
 typedef struct _socket_data {
     int   sock;
 
@@ -79,6 +86,7 @@ typedef struct _socket_data {
     uint   size;        // max size of the body buffer.
     uint   recv;        // received body data size.
     char*  body;        // point to head + used if head buffer is enough.
+    uint   type;        //
 
     vohttpd* set;       // pointer to global setting.
 } socket_data;
@@ -102,6 +110,7 @@ typedef int   (*_error_page)(socket_data *, int, const char *);
 
 typedef const char* (*_load_plugin)(const char *);
 typedef const char* (*_unload_plugin)(const char *);
+typedef int   (*_httpd_send)(int, const void*, int, int);
 
 struct _vohttpd {
     unsigned short port;            // default http server port.
@@ -111,6 +120,7 @@ struct _vohttpd {
     string_hash*   funcs;           // store all registered plugins(file, function).
 
     // common function hook.
+    _httpd_send    send;
     _http_filter   http_filter;
     _error_page    error_page;
 
@@ -127,7 +137,6 @@ extern int vohttpd_first_parameter(string_reference *s, string_reference *f);
 extern const char *vohttpd_code_message(int code);
 extern const char *vohttpd_mime_map(const char *ext);
 extern const char *vohttpd_gmtime();
-extern void vohttpd_error(const char *func, const char *msg);
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+ <meta charset="utf-8">
+ <meta http-equiv="X-UA-Compatible" content="IE=edge">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>VoCore | Dashboard</title>
+ <link rel="stylesheet" href="css/bootstrap.min.css">
+ <link rel="stylesheet" href="css/bootstrap.theme.min.css">
+ <link rel="icon" href="favicon.ico">
+</head>
+
+<body>
+<nav class="navbar navbar-default" role="navigation">
+ <div class="container-fluid">
+  <div class="navbar-header">
+   <a class="navbar-brand" href="#"><img src="favicon.ico" height="20"></a>
+   <a class="navbar-brand" href="#">OpenWrt / VoCore</a>
+  </div>
+ </div>
+</nav>
+
+<script src="js/jquery.min.js"></script>
+<script src="js/bootstrap.min.js"></script>
+<script src="js/vohttpd.js"></script>
+<script src="js/voplugin.js"></script>
+
+<script type="text/javascript">
+$(document).ready(function() {
+  voplugin_init();
+});
+
+</script>
+
+</body>
+</html>

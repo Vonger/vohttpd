@@ -33,7 +33,6 @@ Then you will get `vohttpd` executable file in current directory.
 
 
 ###TODO List###
-  1. move out library control function to a plugin, remove current fixed plugin query html page.
-  2. main application should able to load some plugins at start up.
-  3. auth plugin.
-  4. add https to vohttpd.
+  1. auth plugin.
+  2. add https to vohttpd.
+  3. main control plugin, used to load plugin and its related html files.

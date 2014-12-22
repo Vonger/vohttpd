@@ -7,7 +7,6 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <sys/socket.h>
 
 #include "../vohttpd.h"
 
@@ -25,10 +24,10 @@ int test_text(socket_data *d, string_reference *pa)
     size += sprintf(head + size, "%s: %d\r\n", HTTP_CONTENT_LENGTH, total);
     strcat(head + size, "\r\n"); size += 2;
 
-    size = send(d->sock, head, size, 0);
+    size = d->set->send(d->sock, head, size, 0);
     if(size <= 0)
         return -1;
-    size = send(d->sock, buf, total, 0);
+    size = d->set->send(d->sock, buf, total, 0);
     if(size <= 0)
         return -1;
     return 0;
@@ -37,7 +36,7 @@ int test_text(socket_data *d, string_reference *pa)
 int vohttpd_library_query(int id, plugin_info *out)
 {
     static plugin_info info[] = {
-    { ".note", "contains test functions for vohttpd." },
+    { ".", "contains test functions for vohttpd." },
     { "test_text", "it will always show hello world." },
     };
     if(id >= sizeof(info) / sizeof(plugin_info))

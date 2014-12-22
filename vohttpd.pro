@@ -10,3 +10,5 @@ SOURCES += src/vohttpd.c \
 OTHER_FILES += \
             src/plugins/voplugin.c \
             src/plugins/votest.c
+
+OTHER_FILES +=

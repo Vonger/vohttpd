@@ -306,7 +306,3 @@ int vohttpd_uri_first_parameter(string_reference *s, string_reference *first)
     return 0;
 }
 
-void vohttpd_error(const char *func, const char *msg)
-{
-    printf("[%s]%s\n", func, msg);
-}
