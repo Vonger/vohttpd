@@ -44,3 +44,26 @@ function vohttpd_create_panel(title, id, id_body) {
     html += "<div class=\"panel-body\" id=\"" + id_body + "\"></div></div>";
     $(document.body).append(html);
 }
+
+function vohttpd_file_list(path) {
+    var html = $.ajax({url:path, async:false}).responseText;
+    var b = 0, e = 0, btag = "<p id=\"file\">", etag="</p>";
+    var array = [];
+    for(;;) {
+        b = html.indexOf(btag, b);
+        if(b < 0) break;
+        e = html.indexOf(etag, b);
+        if(e < 0 || e < b) break;
+        array.push(html.substr(b + btag.length, e - b - btag.length));
+        b = e + etag.length;
+    }
+    return array;
+}
+
+function vohttpd_main() {
+    var list = vohttpd_file_list("js/plugin");
+    for(i = 0; i < list.length; i++)
+        $.getScript("js/plugin/" + list[i]);
+}
+
+$(document).ready(function(){vohttpd_main();});

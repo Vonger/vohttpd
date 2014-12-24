@@ -70,7 +70,7 @@ function voplugin_refresh() {
     }
 }
 
-function voplugin_init() {
+function voplugin_main() {
     var id_body = "vohttpd-panel-body-voplugin";
     var id = "vohttpd-panel-voplugin", html;
     vohttpd_create_panel("Plugin Control Panel", id, id_body);
@@ -110,3 +110,5 @@ function voplugin_init() {
 
     voplugin_refresh();
 }
+
+voplugin_main();

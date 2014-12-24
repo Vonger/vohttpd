@@ -6,16 +6,19 @@
  <meta name="viewport" content="width=device-width, initial-scale=1">
  <title>VoCore | Dashboard</title>
  <link rel="stylesheet" href="css/bootstrap.min.css">
- <link rel="stylesheet" href="css/bootstrap.theme.min.css">
+ <link rel="stylesheet" href="css/bootstrap-theme.min.css">
  <link rel="icon" href="favicon.ico">
 </head>
-
+<style type="text/css">
+.vonger{position: relative;height:24px;width:24px;background:gray;box-sizing:border-box;border-radius:100%;position:absolute;margin:auto;}
+.vonger1{height:22%;width:22%;position:absolute;left:55%;top:21%;margin:auto;background:white;border-radius:100%;}
+.vonger2{width:8%;height:50%;position:absolute;left:40%;top:45%;margin:auto;background:white;border-radius: 10px;transform:rotate(110deg);}
+</style>
 <body>
 <nav class="navbar navbar-default" role="navigation">
  <div class="container-fluid">
   <div class="navbar-header">
-   <a class="navbar-brand" href="#"><img src="favicon.ico" height="20"></a>
-   <a class="navbar-brand" href="#">OpenWrt / VoCore</a>
+   <a class="navbar-brand" href="#"><div class="vonger"><div class="vonger1"></div><div class="vonger2"></div></div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;OpenWrt / VoCore</a>
   </div>
  </div>
 </nav>
@@ -23,14 +26,6 @@
 <script src="js/jquery.min.js"></script>
 <script src="js/bootstrap.min.js"></script>
 <script src="js/vohttpd.js"></script>
-<script src="js/voplugin.js"></script>
-
-<script type="text/javascript">
-$(document).ready(function() {
-  voplugin_init();
-});
-
-</script>
 
 </body>
 </html>

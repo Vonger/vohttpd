@@ -107,6 +107,10 @@ typedef int   (*_plugin_cleanup)();
 typedef int   (*_http_filter)(socket_data *);
 // error page interface, used to customize error page.
 typedef int   (*_error_page)(socket_data *, int, const char *);
+// http file/index request function.
+typedef int   (*_http_file)(socket_data *, const char *);
+// http folder request function.
+typedef int   (*_http_folder)(socket_data *, const char *);
 
 typedef const char* (*_load_plugin)(const char *);
 typedef const char* (*_unload_plugin)(const char *);
@@ -122,6 +126,8 @@ struct _vohttpd {
     // common function hook.
     _httpd_send    send;
     _http_filter   http_filter;
+    _http_file     http_file;
+    _http_folder   http_folder;
     _error_page    error_page;
 
     _load_plugin   load_plugin;

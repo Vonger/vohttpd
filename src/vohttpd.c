@@ -18,6 +18,7 @@
 #include <sys/select.h>
 #include <sys/signal.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <errno.h>
@@ -25,6 +26,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include "vohttpd.h"
 
@@ -121,12 +123,27 @@ const char *vohttpd_file_extend(const char *path)
     return p == NULL ? p : (p + 1);
 }
 
-int vohttpd_http_file(socket_data *d, const char *path)
+int vohttpd_is_folder(const char *path)
 {
-    char buf[SENDBUF_SIZE];
+    struct stat s;
+    if(lstat(path, &s) < 0)
+        return 0;
+    return S_ISDIR(s.st_mode);
+}
+
+int vohttpd_http_file(socket_data *d, const char *param)
+{
+    char buf[SENDBUF_SIZE], *p;
+    char path[MESSAGE_SIZE];
     const char* ext;
     int size, total = 0;
     FILE *fp;
+
+    // file name might contains parameter, we should ignore it.
+    if(p = strchr(param, '?'), p != NULL)
+        strncpy(path, param, p - param);
+    else
+        strncpy(path, param, MESSAGE_SIZE);
 
     total = vohttpd_file_size(path);
     if(total == -1)
@@ -161,6 +178,44 @@ int vohttpd_http_file(socket_data *d, const char *path)
     return total;
 }
 
+int vohttpd_http_folder(socket_data *d, const char *path)
+{
+    char buf[SENDBUF_SIZE];
+    int size, total = 0;
+    DIR *dir;
+    struct dirent *dp;
+
+    dir = opendir(path);
+    if(dir == NULL)
+        return d->set->error_page(d, 404, "can not open the folder.");
+
+    size = vohttpd_reply_head(buf, 200);
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %s\r\n", HTTP_DATE_TIME, vohttpd_gmtime());
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %s\r\n", HTTP_CONTENT_TYPE, vohttpd_mime_map("html"));
+    size += snprintf(buf + size, SENDBUF_SIZE - size, "%s: %s\r\n", HTTP_CONNECTION, "close");
+    strcat(buf + size, "\r\n"); size += 2;
+    size = d->set->send(d->sock, buf, size, 0);
+
+    size = snprintf(buf, SENDBUF_SIZE, "<html><head><title>%s</title></head>"
+        "<body style=\"font-family:" HTTP_FONT "\"><h2>%s</h2><hr>", path, path);
+    total += d->set->send(d->sock, buf, size, 0);
+
+    while(dp = readdir(dir), dp) {
+        if(strcmp(dp->d_name, ".") == 0 || strcmp(dp->d_name, "..") == 0)
+            continue;
+        if(dp->d_type == DT_DIR)
+            size = snprintf(buf, SENDBUF_SIZE, "<p id=\"dir\"><b>[%s]</b><p>", dp->d_name);
+        else
+            size = snprintf(buf, SENDBUF_SIZE, "<p id=\"file\">%s</p>", dp->d_name);
+        total += d->set->send(d->sock, buf, size, 0);
+    }
+    closedir(dir);
+
+    size = snprintf(buf, SENDBUF_SIZE, "</body></html>");
+    total += d->set->send(d->sock, buf, size, 0);
+    return total;
+}
+
 int vohttpd_default(socket_data *d, string_reference *fn)
 {
     char head[MESSAGE_SIZE];
@@ -174,19 +229,17 @@ int vohttpd_default(socket_data *d, string_reference *fn)
 
     if(head[fn->size - 1] == '/') {
         snprintf(path, MESSAGE_SIZE, "%s/%sindex.html", g_set.base, head);
-        if(vohttpd_file_size(path) != (uint)(-1)) {
-            // there is index file in folder.
-            return vohttpd_http_file(d, path);
-        } else {
-            snprintf(path, MESSAGE_SIZE, "%s%s", g_set.base, head);
-            // no such index file, we try to load default, always show folder.
-            return d->set->error_page(d, 501, NULL);
-        }
+        if(vohttpd_file_size(path) != (uint)(-1))
+            return d->set->http_file(d, path);
+        // no index.html, we show it as folder.
     }
 
     // the address might be a file.
     snprintf(path, MESSAGE_SIZE, "%s%s", g_set.base, head);
-    return vohttpd_http_file(d, path);
+    if(vohttpd_is_folder(path))
+        return d->set->http_folder(d, path);
+    else
+        return d->set->http_file(d, path);
 }
 
 int vohttpd_function(socket_data *d, string_reference *fn, string_reference *pa)
@@ -467,6 +520,8 @@ void vohttpd_init()
     g_set.error_page = vohttpd_error_page;
     g_set.load_plugin = vohttpd_load_plugin;
     g_set.unload_plugin = vohttpd_unload_plugin;
+    g_set.http_file = vohttpd_http_file;
+    g_set.http_folder = vohttpd_http_folder;
 
     // ignore the signal, or it will stop our server once client disconnected.
     signal(SIGPIPE, SIG_IGN);
