@@ -39,6 +39,10 @@
 
 static vohttpd g_set;
 
+/* input, file path: /var/www/html/index.html
+ * output, file name: index.html
+ * return, the length of the file name.
+ */
 int get_name_from_path(const char *path, char *name, size_t size)
 {
     char *p1, *p2, *p;
@@ -47,21 +51,25 @@ int get_name_from_path(const char *path, char *name, size_t size)
     p2 = strrchr(path, '\\');
     if(p1 == NULL && p2 == NULL) {
         strncpy(name, path, size);
-        return strlen(path);
+        return strlen(name);
     }
 
     p = max(p1, p2) + 1;
     strncpy(name, p, size);
-    return strlen(p);
+    return strlen(name);
 }
 
+/* alloc a new buffer for http request.
+ * we use its socket as http request key to make it simple.
+ * socket data contains full information of a request.
+ */
 socket_data* socketdata_new(linear_hash *socks, int sock)
 {
     socket_data *d;
 
     d = (socket_data *)linear_hash_set(socks, (uint)sock);
     if(d == NULL)
-        return d;      // buffer has full...show error page?
+        return NULL;      // buffer has full...show error page?
 
     memset(d, 0, sizeof(socket_data));
     d->sock = sock;
@@ -72,16 +80,18 @@ socket_data* socketdata_new(linear_hash *socks, int sock)
 void socketdata_delete(linear_hash *socks, int sock)
 {
     socket_data *d;
-    char path[MESSAGE_SIZE];
 
     d = (socket_data *)linear_hash_get(socks, sock);
-    close(sock);
+    if(d == NULL)
+        return;
 
-    // delete the map file in tmp folder(alloced when post data > BUFFER_SIZE
+    close(sock);
+    // delete the map file in tmp folder(created when post data > BUFFER_SIZE)
     if(d->type == SOCKET_DATA_MMAP && d->body) {
+        char map[MESSAGE_SIZE];
         munmap(d->body, d->size);
-        sprintf(path, MMAP_FILE_NAME, d->sock);
-        remove(path);       // the map file might not exists.
+        snprintf(map, MESSAGE_SIZE, "%s" HTTP_CGI_BIN MMAP_FILE_NAME, d->set->base, d->sock);
+        remove(map);       // the map file might not exists.
     }
 
     linear_hash_remove(socks, sock);
@@ -94,7 +104,7 @@ uint vohttpd_decode_content_size(socket_data *d)
     p = strstr(d->head, HTTP_CONTENT_LENGTH);
     if(p == NULL)
         return 0;
-    p += sizeof(HTTP_CONTENT_LENGTH);
+    p += sizeof(HTTP_CONTENT_LENGTH) - 1;
 
     while((*p < '0' || *p > '9') && *p != '\r' && *p != '\n')
         p++;
@@ -139,7 +149,7 @@ int vohttpd_http_file(socket_data *d, const char *param)
     int size, total = 0;
     FILE *fp;
 
-    // file name might contains parameter, we should ignore it.
+    // file name might contains parameter, we should cut it.
     if(p = strchr(param, '?'), p != NULL)
         strncpy(path, param, p - param);
     else
@@ -255,6 +265,7 @@ int vohttpd_function(socket_data *d, string_reference *fn, string_reference *pa)
     func = (_plugin_func)string_hash_get(d->set->funcs, name);
     if(func == NULL)
         return d->set->error_page(d, 404, NULL);
+
     return func(d, pa);
 }
 
@@ -354,7 +365,6 @@ int vohttpd_decode_post(socket_data *d, string_reference *fn, string_reference *
 int vohttpd_data_filter(socket_data *d)
 {
     string_reference fn, pa;
-
     if(memcmp(d->head, "GET", 3) == 0) {
         switch(vohttpd_decode_get(d, &fn, &pa)) {
         case 0: {
@@ -474,6 +484,7 @@ const char* vohttpd_load_plugin(const char *path)
     h = dlopen(path, RTLD_NOW);
     if(h == NULL)
         return dlerror();
+
     query = dlsym(h, LIBRARY_QUERY);
     if(query == NULL) {
         dlclose(h);
@@ -535,8 +546,8 @@ void vohttpd_uninit()
 
 void vohttpd_loop()
 {
-    int socksrv, sockmax, sock, b = 1;
-    uint i, count, size;
+    int socksrv, sockmax, sock, b = 1, count, size;
+    uint i;
     char *p;
 
     struct sockaddr_in addr;
@@ -614,6 +625,8 @@ void vohttpd_loop()
             if(FD_ISSET(d->sock, &fdr)) {
                 count--;
 
+                // body size = 0, we process the reuqest.
+                // body size != 0, we put it to buffer, wait for full body then process.
                 if(d->size == 0) {
 
                     // receive http head data.
@@ -646,8 +659,8 @@ void vohttpd_loop()
                     d->type = SOCKET_DATA_STACK;
                     d->size = vohttpd_decode_content_size(d);
                     if(d->size == 0 || d->recv >= d->size) {  // no content or already get full data.
-                        if(!g_set.http_filter(d))
-                            socketdata_delete(g_set.socks, d->sock);
+                        g_set.http_filter(d);
+                        socketdata_delete(g_set.socks, d->sock);
                         // no body in this http request, it should be GET.
                         continue;
                     }
@@ -655,32 +668,31 @@ void vohttpd_loop()
                     // the head buffer can not contain the body data(too big)
                     // we have to alloc memory for it.
                     if(d->size - d->recv > RECVBUF_SIZE - d->used) {
-                        char path[MESSAGE_SIZE];
+                        char map[MESSAGE_SIZE];
                         int  fd;
 
                         // create empty file for mmap.
-                        sprintf(path, MMAP_FILE_NAME, d->sock);
-                        fd = open(path, O_RDWR | O_CREAT);
+                        snprintf(map, MESSAGE_SIZE, "%s" HTTP_CGI_BIN MMAP_FILE_NAME, d->set->base, d->sock);
+                        fd = open(map, O_RDWR | O_CREAT, S_IRWXU);
                         if(fd < 0) {
                             g_set.error_page(d, 413, strerror(errno));
                             socketdata_delete(g_set.socks, d->sock);
-                            printf("error\n");
                             continue;
                         }
 
                         // resize the file, or mmap pointer might fail.
-                        lseek(fd, d->size, SEEK_SET);
-                        write(fd, "\0", 1);
+                        lseek(fd, d->size - 1, SEEK_SET);
+                        write(fd, "\0", 1);     // set file size to d->size.
 
                         // clear up in function socketdata_delete.
                         d->body = mmap(NULL, d->size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-                        if(d->body == NULL) {
+                        close(fd);
+
+                        if(d->body == MAP_FAILED) {
                             g_set.error_page(d, 413, strerror(errno));
                             socketdata_delete(g_set.socks, d->sock);
-                            close(fd);
                             continue;
                         }
-                        close(fd);
                         d->type = SOCKET_DATA_MMAP;
 
                         if(d->recv) {
@@ -701,8 +713,8 @@ void vohttpd_loop()
                     d->recv += size;
 
                     if(d->recv >= d->size) {
-                        if(!g_set.http_filter(d))
-                            socketdata_delete(g_set.socks, d->sock);
+                        g_set.http_filter(d);
+                        socketdata_delete(g_set.socks, d->sock);
                         continue;
                     }
                 }

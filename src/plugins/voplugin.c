@@ -229,7 +229,7 @@ int plugin_unload(socket_data *d, string_reference *pa)
  */
 int plugin_install(socket_data *d, string_reference *pa)
 {
-    char boundary[MESSAGE_SIZE] = {0}, *p, *e;
+    char boundary[MESSAGE_SIZE] = {0}, path[MESSAGE_SIZE], *p, *e;
     char name[FUNCTION_SIZE] = {0};
     const char *msg;
 
@@ -266,24 +266,27 @@ int plugin_install(socket_data *d, string_reference *pa)
     if(e == NULL)
         return plugin_json_status(d, "no end of content.");
 
-    // write file to local.
+    // write file to local, default: /var/www/html/cgi-bin/.
+    snprintf(path, MESSAGE_SIZE, "%s" HTTP_CGI_BIN "%s", d->set->base, name);
+
     switch(d->type) {
     case SOCKET_DATA_MMAP: {  // mmap memory
         char map[MESSAGE_SIZE];
-        snprintf(map, MESSAGE_SIZE, MMAP_FILE_NAME, d->sock);
+        int size = e - p - 2;
+        snprintf(map, MESSAGE_SIZE, "%s" HTTP_CGI_BIN MMAP_FILE_NAME, d->set->base, d->sock);
 
-        memmove(d->body, p, e - p - 2);
-        msync(d->body, e - p - 2, MS_SYNC);
+        memmove(d->body, p, size);
+        msync(d->body, size, MS_SYNC);
         munmap(d->body, d->size);
 
         // set buffer to NULL to avoid pointer issue.
         d->body = NULL;
-        truncate(map, e - p - 2);  // resize the file.
-        rename(map, name);
+        truncate(map, size);
+        rename(map, path);
         break; }
 
     case SOCKET_DATA_STACK: {
-        FILE *fp = fopen(name, "wb");
+        FILE *fp = fopen(path, "wb");
         if(fp == NULL)
             return plugin_json_status(d, "can not open file.");
         fwrite(p, 1, e - p - 2, fp);
@@ -292,9 +295,9 @@ int plugin_install(socket_data *d, string_reference *pa)
     }
 
     // load plugin to vphttpd.
-    msg = d->set->load_plugin(name);
+    msg = d->set->load_plugin(path);
     if(msg != NULL)  // error, delete uploaded file.
-        remove(name);
+        remove(path);
     return plugin_json_status(d, msg == NULL ? "success" : msg);
 }
 
