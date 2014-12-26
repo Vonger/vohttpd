@@ -516,10 +516,8 @@ int vohttpd_send(int sock, const void *data, int size, int type)
 void vohttpd_init()
 {
     // default parameters.
-    if(!g_set.port)
-        g_set.port = 8080;
-    if(!g_set.base)
-        g_set.base = "/var/www/html";
+    g_set.port = 80;
+    g_set.base = "/var/www/html";
 
     // alloc buffer for globle pointer(maybe make them to static is better?)
     g_set.funcs = string_hash_alloc(FUNCTION_SIZE, FUNCTION_COUNT);
@@ -751,6 +749,7 @@ void vohttpd_show_status()
 void vohttpd_show_usage()
 {
     printf("usage: vohttpd [-bdhp?]\n\n");
+    printf("example: vohttpd -d/var/www/html/cgi-bin/votest.so -p8080\n");
     printf("\t-b[path]  set www home/base folder, default /var/www/html.\n"
            "\t-d[path]  preload plugin.\n"
            "\t-h,-?     show this usage.\n"
